@@ -6,14 +6,14 @@
   <title>Particle Bridge — Controller</title>
   <style>
     :root {
-      --bg: #060809;
-      --surface: rgba(14, 18, 22, 0.92);
-      --border: rgba(255,255,255,0.1);
+      --bg: #050607;
+      --surface: rgba(8, 10, 12, 0.86);
+      --border: rgba(255, 255, 255, 0.16);
       --accent: #46a6ff;
       --accent-dark: #1a3550;
-      --text: #e8ecf0;
-      --muted: #7a8594;
-      font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+      --text: #f2f2f2;
+      --muted: #c9cdd2;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color: var(--text);
       background: var(--bg);
     }
@@ -25,9 +25,10 @@
       padding: 14px 20px;
       border-bottom: 1px solid var(--border);
       background: var(--surface);
+      backdrop-filter: blur(12px);
       position: sticky; top: 0; z-index: 20;
     }
-    header h1 { font-size: 15px; font-weight: 600; }
+    header h1 { font-size: 16px; font-weight: 600; }
     #status {
       margin-left: auto;
       font-size: 11px;
@@ -46,6 +47,7 @@
       padding: 16px;
       max-width: 1200px;
       margin: 0 auto;
+      padding-bottom: 96px;
     }
 
     .card {
@@ -53,13 +55,14 @@
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 14px;
+      backdrop-filter: blur(12px);
     }
     .card h2 {
-      font-size: 10px;
+      font-size: 12px;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.1em;
-      color: var(--muted);
+      letter-spacing: 0.08em;
+      opacity: 0.72;
       margin-bottom: 12px;
     }
 
@@ -76,6 +79,7 @@
       font-variant-numeric: tabular-nums;
       color: var(--accent);
       font-size: 11px;
+      opacity: 0.85;
     }
     input[type="range"] {
       width: 100%;
@@ -89,21 +93,29 @@
       gap: 6px;
     }
     .btn-grid.single { grid-template-columns: 1fr; }
+    
     button {
+      width: 100%;
       padding: 8px 10px;
       border-radius: 8px;
-      border: 1px solid var(--border);
-      background: rgba(255,255,255,0.06);
-      color: var(--text);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background: rgba(255, 255, 255, 0.08);
+      color: inherit;
       font-size: 12px;
       cursor: pointer;
-      transition: background 0.15s, border-color 0.15s;
+      transition: background 0.15s, border-color 0.15s, transform 0.05s;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      user-select: none;
     }
-    button:hover { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.2); }
-    button:active { background: var(--accent-dark); border-color: var(--accent); }
+    button:hover { background: rgba(255, 255, 255, 0.14); }
+    button:active, button.active {
+      background: var(--accent-dark) !important;
+      border-color: var(--accent) !important;
+      color: var(--accent) !important;
+      transform: scale(0.95);
+    }
     button.danger { border-color: #f87171; }
     button.danger:hover { background: #2b0f0f; }
     button.primary { background: var(--accent-dark); border-color: var(--accent); color: var(--accent); }
@@ -124,8 +136,6 @@
     #log .entry.param { color: #38bdf8; }
     #log .entry.action { color: #c084fc; }
     #log .entry.info { color: #6b7280; }
-
-    main { padding-bottom: 96px; }
   </style>
 </head>
 <body>
@@ -145,12 +155,29 @@
 <div id="log"></div>
 
 <script>
-const WS_URL = `ws://${location.host}?role=controller`;
+const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const WS_URL = `${protocol}//${location.host}/?role=controller`;
+
 let ws = null;
 let paramDefs = [];
 let actionDefs = [];
 let state = {};
-const sliders = {}; // key → { input, valEl }
+
+const sliders = {};       
+const actionButtons = {}; 
+
+const KEY_ACTION_MAP = {
+  KeyR: 'setSphere',
+  KeyD: 'divideRing',
+  KeyX: 'mergeRing',
+  KeyG: 'rotateNextRing',
+  KeyW: 'toggleWind',
+  KeyB: 'triggerBeat',
+  KeyM: 'setDiamond',
+  KeyT: 'setTornado',
+  KeyH: 'setLinesHorizon',
+  KeyN: 'setMandala',
+};
 
 function logEntry(text, cls = 'info') {
   const el = document.getElementById('log');
@@ -174,7 +201,9 @@ function connect() {
   };
 
   ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+
     if (msg.type === 'defs') {
       paramDefs = msg.payload.params;
       actionDefs = msg.payload.actions;
@@ -224,7 +253,6 @@ function syncSliders() {
   }
 }
 
-// ── Group parameters by visual section ──────────────────────────────────────
 const GROUPS = [
   {
     title: '🪐 Anillos',
@@ -280,7 +308,6 @@ function buildUI() {
     h2.textContent = group.title;
     card.append(h2);
 
-    // Sliders
     for (const key of group.params) {
       const def = paramDefs.find(p => p.key === key);
       if (!def) continue;
@@ -309,12 +336,14 @@ function buildUI() {
         sendParam(key, Number(input.value));
       });
 
+      // Retirar el foco tras interactuar para no bloquear el teclado global
+      input.addEventListener('change', () => input.blur());
+
       sliders[key] = { input, valEl };
       row.append(lbl, input);
       card.append(row);
     }
 
-    // Action buttons
     if (group.actions.length > 0) {
       const grid = document.createElement('div');
       grid.className = group.actions.length === 1 ? 'btn-grid single' : 'btn-grid';
@@ -323,11 +352,19 @@ function buildUI() {
       for (const key of group.actions) {
         const def = actionDefs.find(a => a.key === key);
         if (!def) continue;
+        
         const btn = document.createElement('button');
         btn.textContent = def.label;
+
         if (key === 'reset') btn.className = 'danger';
         if (key === 'setSphere') btn.className = 'primary';
-        btn.addEventListener('click', () => sendAction(key));
+
+        actionButtons[key] = btn;
+
+        btn.addEventListener('click', () => {
+          sendAction(key);
+          btn.blur();
+        });
         grid.append(btn);
       }
       card.append(grid);
@@ -338,6 +375,45 @@ function buildUI() {
 }
 
 connect();
+
+// Captura global de eventos de teclado
+window.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  
+  // Ignorar atajos si el usuario está enfocado en un campo de texto
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' && document.activeElement.type !== 'range') return;
+
+  const actionKey = KEY_ACTION_MAP[e.code];
+
+  if (actionKey && actionButtons[actionKey]) {
+    e.preventDefault();
+    const btn = actionButtons[actionKey];
+    
+    btn.classList.add('active');
+    setTimeout(() => btn.classList.remove('active'), 120);
+
+    btn.click();
+    return;
+  }
+
+  if (e.code === 'KeyK') {
+    e.preventDefault();
+    const next = Math.min(5.0, (state['brightnessMultiplier'] ?? 0.65) + 0.35);
+    sendParam('brightnessMultiplier', next);
+    return;
+  }
+  if (e.code === 'KeyL') {
+    e.preventDefault();
+    const next = Math.max(0.1, (state['brightnessMultiplier'] ?? 0.65) - 0.35);
+    sendParam('brightnessMultiplier', next);
+    return;
+  }
+}, true);
+
+setTimeout(() => {
+  logEntry('⌨️  D añadir anillo · X reagrupar · G girar · W viento · B beat · M diamante · T tornados · H horizonte · N mándala · R esfera · K/L brillo', 'info');
+}, 600);
 </script>
 </body>
 </html>

@@ -18,14 +18,14 @@ const clients = new Map(); // ws → { role: 'simulation' | 'controller' }
 // ── HTTP + WebSocket server ───────────────────────────────────────────────────
 const app = express();
 app.use(express.json());
-app.use(express.static(join(__dirname, '..', 'public')));
+app.use(express.static(__dirname));
 
 // REST: get full state (useful for initial load)
 app.get('/api/state', (_req, res) => res.json(state));
 
 // REST: update one or multiple params (alternative to WS)
 app.post('/api/params', (req, res) => {
-  const updates = req.body; // { key: value, ... }
+  const updates = req.body;
   applyParamUpdates(updates, null);
   res.json({ ok: true, state });
 });
@@ -44,15 +44,14 @@ const wss = new WebSocketServer({ server: httpServer });
 wss.on('connection', (ws, req) => {
   const ip = req.socket.remoteAddress;
   const query = new URL(req.url, `http://localhost`).searchParams;
-  const role = query.get('role') || 'controller'; // 'simulation' | 'controller'
+  const role = query.get('role') || 'controller';
 
   clients.set(ws, { role, ip });
 
   log(chalk.green(`✦ Connected`), chalk.dim(`[${role}]`), chalk.dim(ip));
 
-  // Send full state on connect so client can sync immediately
+  // Send full state and definitions on connect
   send(ws, { type: 'state', payload: state });
-  // Also send param definitions so controller UIs can build themselves
   send(ws, { type: 'defs', payload: { params: PARAM_DEFS, actions: ACTION_DEFS } });
 
   ws.on('message', (raw) => {
@@ -75,23 +74,19 @@ function handleMessage(sender, msg) {
 
   switch (type) {
     case 'set_param': {
-      // { type: 'set_param', payload: { key, value } }
       const { key, value } = payload;
       applyParamUpdates({ [key]: value }, sender);
       break;
     }
     case 'set_params': {
-      // { type: 'set_params', payload: { key: value, ... } }
       applyParamUpdates(payload, sender);
       break;
     }
     case 'action': {
-      // { type: 'action', payload: { action } }
       broadcastAction(payload.action, sender);
       break;
     }
     case 'state_update': {
-      // Sent by the simulation to report current live param values
       Object.assign(state, payload);
       broadcastToControllers({ type: 'state', payload: state }, sender);
       break;
@@ -115,16 +110,13 @@ function applyParamUpdates(updates, sender) {
   }
   if (Object.keys(changed).length === 0) return;
 
-  // Forward to simulation clients
   broadcastToSimulations({ type: 'set_params', payload: changed }, sender);
-  // Mirror to other controllers so all UIs stay in sync
   broadcastToControllers({ type: 'state', payload: state }, sender);
 }
 
 function broadcastAction(action, sender) {
   log(chalk.magenta(`  ⚡ action:`), chalk.white(action));
   broadcastToSimulations({ type: 'action', payload: { action } }, sender);
-  // Echo to controllers so they can reflect UI state if needed
   broadcastToControllers({ type: 'action', payload: { action } }, sender);
 }
 
