@@ -20,6 +20,11 @@ const app = express();
 app.use(express.json());
 app.use(express.static(__dirname));
 
+// Ruta explícita para la raíz si index.html está en la misma carpeta raíz
+app.get('/', (_req, res) => {
+  res.sendFile(join(__dirname, 'index.html'));
+});
+
 // REST: get full state (useful for initial load)
 app.get('/api/state', (_req, res) => res.json(state));
 
