@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Particle Bridge — Controller</title>
+  <style>
+    :root {
+      --bg: #060809;
+      --surface: rgba(14, 18, 22, 0.92);
+      --border: rgba(255,255,255,0.1);
+      --accent: #46a6ff;
+      --accent-dark: #1a3550;
+      --text: #e8ecf0;
+      --muted: #7a8594;
+      font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { min-height: 100vh; background: var(--bg); }
+
+    header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      position: sticky; top: 0; z-index: 20;
+    }
+    header h1 { font-size: 15px; font-weight: 600; }
+    #status {
+      margin-left: auto;
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--border);
+    }
+    #status.connected { color: #4ade80; border-color: #4ade8055; background: #0f2b1a; }
+    #status.disconnected { color: #f87171; border-color: #f8717155; background: #2b0f0f; }
+
+    main {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 14px;
+      padding: 16px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+    }
+    .card h2 {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+
+    .param-row {
+      margin-bottom: 10px;
+    }
+    .param-row label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      margin-bottom: 3px;
+    }
+    .param-row .val {
+      font-variant-numeric: tabular-nums;
+      color: var(--accent);
+      font-size: 11px;
+    }
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    .btn-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .btn-grid.single { grid-template-columns: 1fr; }
+    button {
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    button:hover { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.2); }
+    button:active { background: var(--accent-dark); border-color: var(--accent); }
+    button.danger { border-color: #f87171; }
+    button.danger:hover { background: #2b0f0f; }
+    button.primary { background: var(--accent-dark); border-color: var(--accent); color: var(--accent); }
+
+    #log {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      height: 80px;
+      background: #040506;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      font-family: 'Menlo', 'Consolas', monospace;
+      color: var(--muted);
+      overflow-y: auto;
+      padding: 6px 16px;
+    }
+    #log .entry { padding: 1px 0; }
+    #log .entry.param { color: #38bdf8; }
+    #log .entry.action { color: #c084fc; }
+    #log .entry.info { color: #6b7280; }
+
+    main { padding-bottom: 96px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <span>🎛</span>
+  <h1>Particle Bridge — Controller</h1>
+  <div id="status" class="disconnected">● Desconectado</div>
+</header>
+
+<main id="main">
+  <div class="card" style="grid-column:1/-1; text-align:center; padding:40px; color: var(--muted);">
+    Conectando al servidor…
+  </div>
+</main>
+
+<div id="log"></div>
+
+<script>
+const WS_URL = `ws://${location.host}?role=controller`;
+let ws = null;
+let paramDefs = [];
+let actionDefs = [];
+let state = {};
+const sliders = {}; // key → { input, valEl }
+
+function logEntry(text, cls = 'info') {
+  const el = document.getElementById('log');
+  const div = document.createElement('div');
+  div.className = `entry ${cls}`;
+  const now = new Date().toLocaleTimeString('es-CO', { hour12: false });
+  div.textContent = `[${now}] ${text}`;
+  el.prepend(div);
+  if (el.children.length > 60) el.lastChild.remove();
+}
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+  document.getElementById('status').textContent = '● Conectando…';
+  document.getElementById('status').className = '';
+
+  ws.onopen = () => {
+    document.getElementById('status').textContent = '● Conectado';
+    document.getElementById('status').className = 'connected';
+    logEntry('Conexión establecida con el servidor bridge.', 'info');
+  };
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'defs') {
+      paramDefs = msg.payload.params;
+      actionDefs = msg.payload.actions;
+      buildUI();
+    } else if (msg.type === 'state') {
+      Object.assign(state, msg.payload);
+      syncSliders();
+    } else if (msg.type === 'action') {
+      logEntry(`⚡ acción remota: ${msg.payload.action}`, 'action');
+    }
+  };
+
+  ws.onclose = () => {
+    document.getElementById('status').textContent = '● Desconectado';
+    document.getElementById('status').className = 'disconnected';
+    logEntry('Conexión cerrada. Reintentando en 3s…', 'info');
+    setTimeout(connect, 3000);
+  };
+
+  ws.onerror = () => {
+    logEntry('Error de conexión WebSocket.', 'info');
+  };
+}
+
+function sendParam(key, value) {
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'set_param', payload: { key, value } }));
+    logEntry(`${key} = ${Number(value).toFixed(3)}`, 'param');
+  }
+}
+
+function sendAction(action) {
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'action', payload: { action } }));
+    logEntry(`⚡ ${action}`, 'action');
+  }
+}
+
+function syncSliders() {
+  for (const [key, { input, valEl }] of Object.entries(sliders)) {
+    if (state[key] !== undefined) {
+      const def = paramDefs.find(p => p.key === key);
+      input.value = state[key];
+      const dec = def?.step < 0.01 ? 3 : 2;
+      valEl.textContent = Number(state[key]).toFixed(dec);
+    }
+  }
+}
+
+// ── Group parameters by visual section ──────────────────────────────────────
+const GROUPS = [
+  {
+    title: '🪐 Anillos',
+    params: ['timeScale', 'maxSpeed', 'particleSize', 'returnSpeed', 'damping', 'rotationSpeed'],
+    actions: ['divideRing', 'mergeRing', 'rotateNextRing', 'setSphere']
+  },
+  {
+    title: '💨 Viento & Beat',
+    params: ['windSpeed', 'distortionFrequency', 'distortionAmplitude', 'beatPower'],
+    actions: ['toggleWind', 'triggerBeat']
+  },
+  {
+    title: '💎 Diamante',
+    params: ['diamondScale', 'diamondHeight'],
+    actions: ['setDiamond', 'maximizeDiamond']
+  },
+  {
+    title: '🌪️ Tornados',
+    params: ['tornadoRadius', 'tornadoSpeed'],
+    actions: ['setTornado']
+  },
+  {
+    title: '🚀 Líneas al Horizonte',
+    params: ['linesForwardSpeed', 'linesSpread', 'linesTwist', 'linesDistortion', 'linesThickness'],
+    actions: ['setLinesHorizon']
+  },
+  {
+    title: '☸️ Mándala',
+    params: ['mandalaPetals', 'mandalaRadius', 'mandalaLayers', 'mandalaRotationSpeed', 'mandalaPulseSpeed', 'mandalaWaveFreq'],
+    actions: ['setMandala']
+  },
+  {
+    title: '🎥 Cámara & Luz',
+    params: ['cameraSpinSpeed', 'brightnessMultiplier'],
+    actions: ['rotateCameraY', 'lightUp', 'lightDown']
+  },
+  {
+    title: '🔧 Sistema',
+    params: [],
+    actions: ['pause', 'reset']
+  }
+];
+
+function buildUI() {
+  const main = document.getElementById('main');
+  main.innerHTML = '';
+
+  for (const group of GROUPS) {
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    const h2 = document.createElement('h2');
+    h2.textContent = group.title;
+    card.append(h2);
+
+    // Sliders
+    for (const key of group.params) {
+      const def = paramDefs.find(p => p.key === key);
+      if (!def) continue;
+      const row = document.createElement('div');
+      row.className = 'param-row';
+
+      const lbl = document.createElement('label');
+      const nameEl = document.createElement('span');
+      nameEl.textContent = def.label;
+      const valEl = document.createElement('span');
+      valEl.className = 'val';
+      const dec = def.step < 0.01 ? 3 : 2;
+      valEl.textContent = Number(def.default).toFixed(dec);
+      lbl.append(nameEl, valEl);
+
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = def.min;
+      input.max = def.max;
+      input.step = def.step;
+      input.value = state[key] ?? def.default;
+      valEl.textContent = Number(input.value).toFixed(dec);
+
+      input.addEventListener('input', () => {
+        valEl.textContent = Number(input.value).toFixed(dec);
+        sendParam(key, Number(input.value));
+      });
+
+      sliders[key] = { input, valEl };
+      row.append(lbl, input);
+      card.append(row);
+    }
+
+    // Action buttons
+    if (group.actions.length > 0) {
+      const grid = document.createElement('div');
+      grid.className = group.actions.length === 1 ? 'btn-grid single' : 'btn-grid';
+      grid.style.marginTop = group.params.length > 0 ? '12px' : '0';
+
+      for (const key of group.actions) {
+        const def = actionDefs.find(a => a.key === key);
+        if (!def) continue;
+        const btn = document.createElement('button');
+        btn.textContent = def.label;
+        if (key === 'reset') btn.className = 'danger';
+        if (key === 'setSphere') btn.className = 'primary';
+        btn.addEventListener('click', () => sendAction(key));
+        grid.append(btn);
+      }
+      card.append(grid);
+    }
+
+    main.append(card);
+  }
+}
+
+connect();
+</script>
+</body>
+</html>
